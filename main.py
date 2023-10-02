@@ -88,8 +88,8 @@ if __name__ == "__main__":
             eeg_sampling_rate=dataset.eeg_sampling_rate,
             ecg_channels=len(dataset.ecg_electrodes),
             ecg_sampling_rate=dataset.ecg_sampling_rate,
-            spectrogram_scale=4,
-            layers=2,
+            spectrogram_scale=8,
+            layers=4,
             h_dim=512,
             seconds=dataset.window_size,
         )

@@ -143,8 +143,20 @@ class EEG2ECGModel(pl.LightningModule):
             height=self.spectrogram_frequencies,
             kernel_size=self.kernel_size,
         )
-        self.num_ecg_patches = ((self.ecg_spectrogram_samples + self.padding_ecg[0] + self.padding_ecg[1]) // self.kernel_size) * ((self.spectrogram_frequencies + self.padding_ecg[2] + self.padding_ecg[3]) // self.kernel_size)
-        self.num_eeg_patches = ((self.eeg_spectrogram_samples + self.padding_eeg[0] + self.padding_eeg[1]) // self.kernel_size) * ((self.spectrogram_frequencies + self.padding_eeg[2] + self.padding_eeg[3]) // self.kernel_size)
+        self.num_ecg_patches = (
+            (self.ecg_spectrogram_samples + self.padding_ecg[0] + self.padding_ecg[1])
+            // self.kernel_size
+        ) * (
+            (self.spectrogram_frequencies + self.padding_ecg[2] + self.padding_ecg[3])
+            // self.kernel_size
+        )
+        self.num_eeg_patches = (
+            (self.eeg_spectrogram_samples + self.padding_eeg[0] + self.padding_eeg[1])
+            // self.kernel_size
+        ) * (
+            (self.spectrogram_frequencies + self.padding_eeg[2] + self.padding_eeg[3])
+            // self.kernel_size
+        )
         # print(self.num_ecg_patches)
         # raise
 
@@ -183,8 +195,12 @@ class EEG2ECGModel(pl.LightningModule):
 
         self.ecgs_decoder = self.build_decoder(
             out_channels=self.ecg_channels,
-            out_frequencies=self.spectrogram_frequencies + self.padding_ecg[2] + self.padding_ecg[3],
-            out_length=self.ecg_spectrogram_samples + self.padding_ecg[0] + self.padding_ecg[1],
+            out_frequencies=self.spectrogram_frequencies
+            + self.padding_ecg[2]
+            + self.padding_ecg[3],
+            out_length=self.ecg_spectrogram_samples
+            + self.padding_ecg[0]
+            + self.padding_ecg[1],
             h_dim=self.h_dim,
             padding=self.padding_ecg,
             layers=self.layers,
@@ -211,7 +227,9 @@ class EEG2ECGModel(pl.LightningModule):
             [p for m in [self.eegs_encoder, self.reasoner] for p in m.parameters()],
             lr=self.learning_rate,
         )
-        return opt_ecgs, opt_eegs
+        sch_ecgs = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(opt_ecgs, T_0=5, eta_min=5e-5, verbose=False)
+        sch_eegs = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(opt_eegs, T_0=5, eta_min=5e-5, verbose=False)
+        return [opt_ecgs, opt_eegs], [{"scheduler": sch_ecgs, "interval": "step"}, {"scheduler": sch_eegs, "interval": "step"}]
 
     def build_encoder(
         self,
@@ -289,9 +307,20 @@ class EEG2ECGModel(pl.LightningModule):
                         kernel_size=kernel_size,
                         stride=kernel_size,
                     ),
-                    LambdaModule(lambda x: x[:, :, 
-                                             padding[2]:-padding[3] if padding[3]>0 else None,
-                                          padding[0]:-padding[1] if padding[1] > 0 else 0]),
+                    LambdaModule(
+                        lambda x: x[
+                            :,
+                            :,
+                            padding[2] : -padding[3] if padding[3] > 0 else None,
+                            padding[0] : -padding[1] if padding[1] > 0 else 0,
+                        ]
+                    ),
+                    nn.Conv2d(
+                        in_channels=out_channels, out_channels=out_channels, kernel_size=5, stride=1, padding=2, bias=True),
+                    # self.norm_fn(h_dim),
+                    # self.activation_fn,
+                    # nn.ConvTranspose2d(
+                    #     in_channels=h_dim, out_channels=out_channels, kernel_size=7, stride=2, padding=3, output_padding=(1, 0), bias=True),
                     nn.Softplus(),
                 ),
                 "pos_embeddings": nn.Embedding(
@@ -423,6 +452,9 @@ class EEG2ECGModel(pl.LightningModule):
         # retrieves the optimizers
         if self.training and has_trainer:
             opt_ecgs, opt_eegs = self.optimizers()
+            sch_ecgs, sch_eegs = self.lr_schedulers()
+            sch_ecgs.step()
+            sch_eegs.step()
 
         # INPUTS
         eegs = batch["eegs"].to(self.device)
@@ -431,6 +463,7 @@ class EEG2ECGModel(pl.LightningModule):
         assert not torch.isnan(ecgs_gt).any(), "there are nans in the input ecgs"
         batch_size = eegs.shape[0]
         outs = {}
+        logging_dict = {}
 
         ##################################
         ##################################
@@ -508,6 +541,8 @@ class EEG2ECGModel(pl.LightningModule):
                 gradient_clip_algorithm="norm",
             )
             opt_ecgs.step()
+            sch_ecgs.step(self.current_epoch + batch_idx / self.get_dataloader_length())
+            logging_dict["lr_ecgs"] = sch_ecgs.get_last_lr()[-1]
 
         ##################################
         ##################################
@@ -567,6 +602,8 @@ class EEG2ECGModel(pl.LightningModule):
                 gradient_clip_algorithm="norm",
             )
             opt_eegs.step()
+            sch_eegs.step(self.current_epoch + batch_idx / self.get_dataloader_length())
+            logging_dict["lr_eegs"] = sch_eegs.get_last_lr()[-1]
 
         # plot_reconstructed_spectrograms(
         #             sg_pred=ecgs_mel_spectrogram_pred[0],
@@ -627,21 +664,26 @@ class EEG2ECGModel(pl.LightningModule):
             key_and_phase = f"{self.get_phase_name()}/{k}"
             # logs images
             if isinstance(v, wandb.Image):
-                wandb.log({key_and_phase: v})
+                # wandb.log({key_and_phase: v})
+                logging_dict[key_and_phase] = v
             # logs values
             if isinstance(v, torch.Tensor) and v.numel() == 1:
                 outs[k] = v.detach().cpu()
-                self.log(
-                    key_and_phase,
-                    v,
-                    batch_size=batch_size,
-                    logger=True,
-                    on_step=False,
-                    on_epoch=True,
-                    prog_bar=k in {"loss_D", "loss_G"},
-                )
+                logging_dict[key_and_phase] = v.detach().cpu()
+                # self.log(
+                #     key_and_phase,
+                #     v,
+                #     batch_size=batch_size,
+                #     logger=True,
+                #     on_step=False,
+                #     on_epoch=True,
+                #     prog_bar=k in {"loss_D", "loss_G"},
+                # )
             # else:
             #     raise Exception(f"unrecognized logging type {type(v)} for key '{k}'")
+        
+        self.log_dict({k: v for k, v in logging_dict.items() if not isinstance(v, wandb.Image)})
+        wandb.log({k: v for k, v in logging_dict.items() if isinstance(v, wandb.Image)})
         return outs
 
     def discriminator_loss(self, logits, labels: int):
@@ -666,6 +708,11 @@ class EEG2ECGModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         return self.shared_step(batch, batch_idx)
 
+    def get_dataloader_length(self):
+        if self.training:
+            return len(self.trainer.train_dataloader)
+        else:
+            return len(self.trainer.val_dataloader)
     def get_phase_name(self):
         return "train" if self.training else "val"
 
