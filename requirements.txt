@@ -1,0 +1,10 @@
+mne
+icecream
+shutils
+
+numpy
+scipy
+einops
+torch 
+pytorch-lightning 
+wandb
