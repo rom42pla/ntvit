@@ -396,19 +396,118 @@ class EEGfMRINODDIDataset(Dataset):
                 windows += [window]
         return windows
 
+def save_data_to_numpy(dataset_path:str, save_path: str, new_sampling_rate: int = 256):
+    from os import makedirs
+    
+    def get_subject_ids_static(path: str) -> List[str]:
+        assert isdir(path)
+        users_per_signal = {
+            "fMRI": set(os.listdir(join(path, "fMRI"))),
+            "EEG": set(os.listdir(join(path, "EEG1")) + os.listdir(join(path, "EEG2"))),
+        }
+        common_users = sorted(list(users_per_signal["fMRI"] & users_per_signal["EEG"]))
+        # user 35 is somehow broken
+        if "35" in common_users:
+            common_users.remove("35")
+        return common_users
 
+    subject_ids = get_subject_ids_static(dataset_path)
+    
+    global parse_subject_data
+    def parse_subject_data(subject_no):
+        subject_id: str = subject_ids[subject_no]
+        subject_folder = join(save_path, subject_id)
+        st = time.time()
+
+        # loads fmri data
+        fmri_data_filename = [
+            f
+            for f in os.listdir(join(dataset_path, "fMRI", subject_id))
+            if f.endswith("rest_with_cross.nii.gz")
+        ][0]
+        fmris = nib.load(join(dataset_path, "fMRI", subject_id, fmri_data_filename))
+        fmris = fmris.get_fdata()  # (x z y t)
+        # saves to numpy arrays
+        fmris_folder = join(subject_folder, "fmris")
+        if not isdir(fmris_folder):
+            makedirs(fmris_folder)
+        for i in range(fmris.shape[-1]):
+            np.save(join(fmris_folder, f"{i}.npy"), fmris[:,:,:,i])
+
+        # loads eeg data
+        eeg_subject_folder = (
+            "EEG1" if subject_id in os.listdir(join(dataset_path, "EEG1")) else "EEG2"
+        )
+        eeg_data_filename = [
+            f
+            for f in os.listdir(
+                join(dataset_path, eeg_subject_folder, subject_id, "raw")
+            )
+            if f.endswith("vhdr")
+        ][0]
+        eegs = mne.io.read_raw_brainvision(
+            join(
+                dataset_path, eeg_subject_folder, subject_id, "raw", eeg_data_filename
+            ),
+            preload=True,
+            verbose=False,
+        )
+        original_sampling_rate = int(eegs.info["sfreq"])
+        # Compute the mean across channels for each time point
+        mean_amplitude = np.mean(np.abs(eegs._data), axis=0)  # (t)
+        mean_amplitude = np.convolve(
+            mean_amplitude, np.ones(original_sampling_rate) / original_sampling_rate, mode="same"
+        )
+        # computes the cut-off threshold for cropping preliminary parts
+        threshold = np.quantile(
+            mean_amplitude,
+            (original_sampling_rate * fmris.shape[-1] * 2.16) / len(mean_amplitude),
+        )
+        # search for when the record must start
+        for i in range(len(mean_amplitude)):
+            if np.isclose(mean_amplitude[i], threshold, atol=1e-4):
+                i_end = ceil(i + original_sampling_rate + original_sampling_rate * fmris.shape[-1] * 2.16)
+                start_time = eegs.times[i]
+                end_time = eegs.times[i_end]
+                break
+        # crops the eegs
+        eegs = eegs.crop(
+            tmin=start_time, tmax=end_time, include_tmax=True, verbose=False
+        )
+        # resamples the eegs
+        eegs = eegs.resample(new_sampling_rate, n_jobs=os.cpu_count(), verbose=False)
+        # extract the numpy array from the mne raw object
+        eegs, _ = eegs[:, :]  # (c t)
+        samples_per_fmri = ceil(new_sampling_rate * 2.16)
+        eegs_folder = join(subject_folder, "eegs")
+        if not isdir(eegs_folder):
+            makedirs(eegs_folder)
+        for i in range(fmris.shape[-1]):
+            eegs_to_save = eegs[:, i * samples_per_fmri : (i+1) * samples_per_fmri]
+            assert eegs_to_save.shape[-1] == samples_per_fmri 
+            np.save(join(eegs_folder, f"{i}.npy"), eegs_to_save)
+        print("loaded subject", subject_id, "in", np.round(time.time() - st, 2))
+        return eegs, fmris, subject_id
+
+    st = time.time()
+    for i in range(len(subject_ids)):
+        parse_subject_data(i)
+    print("saved dataset in", np.round(time.time() - st, 2))
+    
 if __name__ == "__main__":
     import time
 
     dataset_path = "../../datasets/eeg_fmri_noddi"
-    print("loading EEG fMRI NODDI dataset")
+    save_path=join("fmri_eeg_numpy_512Hz_2")
+    print(f"saving EEG fMRI NODDI dataset from {dataset_path} to {save_path}")
     st = time.time()
-    dataset = EEGfMRINODDIDataset(
-        path=dataset_path,
-        discretize_labels=True,
-        normalize_eegs=True,
-        window_size=2,
-        window_stride=1,
-    )
-    dataset_train, dataset_val = torch.utils.data.random_split(dataset, [0.8, 0.2])
-    print(f"DREAMER loaded in {int(time.time() - st)}s")
+    save_data_to_numpy(dataset_path=dataset_path, save_path=save_path, new_sampling_rate=512)
+    # dataset = EEGfMRINODDIDataset(
+    #     path=dataset_path,
+    #     discretize_labels=True,
+    #     normalize_eegs=True,
+    #     window_size=2,
+    #     window_stride=1,
+    # )
+    # dataset_train, dataset_val = torch.utils.data.random_split(dataset, [0.8, 0.2])
+    # print(f"DREAMER loaded in {int(time.time() - st)}s")
