@@ -10,6 +10,7 @@ import torch
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 import wandb
 
 if __name__ == "__main__":
@@ -82,27 +83,32 @@ if __name__ == "__main__":
             seconds=dataset.window_size,
         )
     elif args.model_type == "attn":
-        from models.attn import EEG2ECGModel
+        from models.attn2 import EEG2ECGModel
         model = EEG2ECGModel(
+            architecture="conv",
+            seconds=dataset.window_size,
             eeg_channels=len(dataset.eeg_electrodes),
             eeg_sampling_rate=dataset.eeg_sampling_rate,
             ecg_channels=len(dataset.ecg_electrodes),
             ecg_sampling_rate=dataset.ecg_sampling_rate,
-            spectrogram_scale=8,
-            layers=4,
-            h_dim=512,
-            seconds=dataset.window_size,
+            layers_for_ecgs=4,
+            layers_for_eegs=4,
+            h_dim=1024,
+            learning_rate_ecgs=1e-3,
+            learning_rate_eegs=1e-3,
+            learning_rate_disc=1e-3,
         )
     assert model.eeg_samples == dataset.eeg_samples_per_window
     assert model.ecg_samples == dataset.ecg_samples_per_window
 
     wandb.login()
-    wandb_logger = WandbLogger(project=project_name, name=f"{date}_{args.dataset_type}", save_dir=project_path, log_model=True)
+    wandb_logger = WandbLogger(project=project_name, name=f"{date}_{args.dataset_type}", save_dir=project_path, log_model=False)
     trainer = pl.Trainer(
         devices=1, accelerator="gpu" if device=="cuda" else "cpu",
         precision="16-mixed" if device=="cuda" else 32,
         logger=wandb_logger,
         max_epochs=1000,
+        callbacks=[EarlyStopping(monitor="train/loss", min_delta=1e-4, patience=20)]
         # limit_train_batches=0.1,
     )
     trainer.fit(model, dataloader_train, dataloader_val)

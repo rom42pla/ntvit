@@ -1,4 +1,5 @@
-mne
+mne         # for EEG data
+nibabel     # for fMRI data
 icecream
 shutils
 

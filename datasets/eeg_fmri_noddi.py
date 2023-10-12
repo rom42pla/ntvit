@@ -3,7 +3,10 @@ import os
 from os.path import isdir, join
 from typing import Optional, Any, Union, List, Dict
 from multiprocessing import Pool
+from math import ceil
 
+import mne
+import nibabel as nib
 import numpy as np
 import scipy.io as sio
 import einops
@@ -11,7 +14,7 @@ import torch
 from torch.utils.data import Dataset
 
 
-class DREAMERDataset(Dataset):
+class EEGfMRINODDIDataset(Dataset):
     def __init__(
         self,
         path: str,
@@ -37,7 +40,7 @@ class DREAMERDataset(Dataset):
         self.drop_last: bool = drop_last
 
         # EEG-related infos
-        self.eeg_sampling_rate: int = 128
+        self.eeg_sampling_rate: int = 256
         self.eeg_electrodes: List[str] = [
             "AF3",
             "F7",
@@ -164,81 +167,85 @@ class DREAMERDataset(Dataset):
     @staticmethod
     def get_subject_ids_static(path: str) -> List[str]:
         assert isdir(path)
-        data: Dict[str, Any] = sio.loadmat(
-            join(path, "DREAMER.mat"), simplify_cells=True
-        )["DREAMER"]["Data"]
-        subject_ids: List[str] = [f"s{i}" for i in range(len(data))]
-        subject_ids.sort()
-        return subject_ids
+        users_per_signal = {
+            "fMRI": set(os.listdir(join(path, "fMRI"))),
+            "EEG": set(os.listdir(join(path, "EEG1")) + os.listdir(join(path, "EEG2"))),
+        } 
+        common_users = sorted(list(users_per_signal["fMRI"] & users_per_signal["EEG"]))
+        # user 35 is somehow broken
+        if "35" in common_users:
+            common_users.remove("35")
+        return common_users
 
     def load_data(self):
-        # loads DREAMER.mat
-        data_raw = sio.loadmat(join(self.path, "DREAMER.mat"), simplify_cells=True)[
-            "DREAMER"
-        ]["Data"]
-
-        global parse_dreamer
-
-        def parse_dreamer(subject_no):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+            
+        global parse_subject_data
+        def parse_subject_data(subject_no):
             subject_id: str = self.subject_ids[subject_no]
             assert subject_id in self.subject_ids
-            subject_data = data_raw[subject_no]
-            eegs: List[np.ndarray] = []
-            ecgs: List[np.ndarray] = []
-            labels: List[np.ndarray] = []
-            experiments_no = len(subject_data["EEG"]["stimuli"])
-            assert (
-                experiments_no
-                == len(subject_data["EEG"]["stimuli"])
-                == len(subject_data["ECG"]["stimuli"])
-                == len(subject_data["EEG"]["stimuli"])
-                == len(subject_data["ScoreArousal"])
-                == len(subject_data["ScoreValence"])
-                == len(subject_data["ScoreDominance"])
-            )
-            for i_experiment in range(experiments_no):
-                # loads the eeg for the experiment
-                eegs += [subject_data["EEG"]["stimuli"][i_experiment]]  # (s c)
-                ecgs += [subject_data["ECG"]["stimuli"][i_experiment]]  # (s c)
-                # loads the labels for the experiment
-                labels += [
-                    np.asarray(
-                        [
-                            subject_data[k][i_experiment]
-                            for k in ["ScoreArousal", "ScoreValence", "ScoreDominance"]
-                        ]
-                    )
-                ]  # (l)
-            # eventually discretizes the labels
-            labels = [
-                [1 if label > 3 else 0 for label in w]
-                if self.discretize_labels
-                else (w - 1) / 4
-                for w in labels
-            ]
-            return eegs, ecgs, labels, subject_id
+            
+            # loads fmri data
+            fmri_data_filename = [f for f in os.listdir(join(self.path, "fMRI", subject_id)) if f.endswith("rest_with_cross.nii.gz")][0]
+            fmris = nib.load(join(self.path, "fMRI", subject_id, fmri_data_filename))
+            fmris = fmris.get_fdata() # (x z y t)
+            # splits the fmris into a list
+            fmris = [fmris[:,:,:, i] for i in range(fmris.shape[-1])]
+            # print(f"fMRIs", len(fmris), fmris[0].shape)
+            
+            # loads eeg data
+            eeg_subject_folder = "EEG1" if subject_id in os.listdir(join(self.path, "EEG1")) else "EEG2"
+            eeg_data_filename = [f for f in os.listdir(join(self.path, eeg_subject_folder, subject_id, "raw")) if f.endswith("vhdr")][0]
+            eegs = mne.io.read_raw_brainvision(join(self.path, eeg_subject_folder, subject_id, "raw", eeg_data_filename), preload=True, verbose=False)
+            sampling_rate = int(eegs.info["sfreq"])
+            print("channels", eegs.ch_names)
+            # Compute the mean across channels for each time point
+            mean_amplitude = np.mean(np.abs(eegs._data), axis=0) # (t)
+            mean_amplitude = np.convolve(mean_amplitude, np.ones(sampling_rate) / sampling_rate, mode='same')
+            # computes the cut-off threshold for cropping preliminary parts
+            threshold = np.quantile(mean_amplitude, sampling_rate * 300 * 2.16 /  len(mean_amplitude))
+            # search for when the record must start
+            for i in range(len(mean_amplitude)):
+                if np.isclose(mean_amplitude[i], threshold, atol=1e-5):
+                    start_time = eegs.times[i]
+                    end_time = eegs.times[ceil(i + sampling_rate + sampling_rate * 300 * 2.16)]
+                    break
+            # crops the eegs
+            eegs = eegs.crop(tmin=start_time, tmax=end_time, include_tmax=True, verbose=False)
+            # resamples the eegs
+            eegs = eegs.resample(self.eeg_sampling_rate, n_jobs=2, verbose=False)
+            # extract the numpy array from the mne raw object
+            samples_per_fmri = ceil(self.eeg_sampling_rate * 2.16)
+            eegs, _ = eegs[:, :] # (c t)
+            # splits the eegs into a list, one record for each fMRI image
+            eegs = [eegs[:, i*samples_per_fmri:i*samples_per_fmri + samples_per_fmri] for i in range(len(fmris))]
+            assert all([e.shape == eegs[0].shape for e in eegs]), f"some eegs are not the same shape"
+            return eegs, fmris, subject_id
 
-        with Pool(processes=os.cpu_count()) as pool:
+        st = time.time()
+        with Pool(processes=os.cpu_count()-1) as pool:
+        # with Pool(processes=len(self.subject_ids)) as pool:
             data_pool = pool.map(
-                parse_dreamer, [i for i in range(len(self.subject_ids))]
+                parse_subject_data, [i for i in range(len(self.subject_ids))]
             )
             data_pool = [d for d in data_pool if d is not None]
             eegs: List[np.ndarray] = [
-                e for eeg_lists, _, _, _ in data_pool for e in eeg_lists
+                e for eegs, _, _ in data_pool for e in eegs
             ]
-            ecgs: List[np.ndarray] = [
-                e for _, ecg_lists, _, _ in data_pool for e in ecg_lists
-            ]
-            labels: List[np.ndarray] = [
-                l for _, _, labels_lists, _ in data_pool for l in labels_lists
+            fmris: List[np.ndarray] = [
+                e for _, fmris, _, _ in data_pool for e in fmris
             ]
             subject_ids: List[str] = [
                 s_id
                 for eegs_lists, _, _, subject_id in data_pool
                 for s_id in [subject_id] * len(eegs_lists)
             ]
-        assert len(eegs) == len(ecgs) == len(labels) == len(subject_ids)
-        return eegs, ecgs, labels, subject_ids
+        assert len(eegs) == len(fmris) == len(subject_ids)
+        print("read dataset in", np.round(time.time() - st, 2))
+        raise
+        return eegs, fmris, subject_ids
 
     def normalize(self, waveforms: List[np.ndarray], mode="minmax"):
         # scales to zero mean and unit variance
@@ -310,10 +317,10 @@ class DREAMERDataset(Dataset):
 if __name__ == "__main__":
     import time
 
-    dataset_path = "../../datasets/dreamer"
-    print("loading DREAMER")
+    dataset_path = "../../datasets/eeg_fmri_noddi"
+    print("loading EEG fMRI NODDI dataset")
     st = time.time()
-    dataset = DREAMERDataset(
+    dataset = EEGfMRINODDIDataset(
         path=dataset_path,
         discretize_labels=True,
         normalize_eegs=True,
