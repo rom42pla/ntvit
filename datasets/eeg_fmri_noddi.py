@@ -18,6 +18,7 @@ class EEGfMRINODDIDataset(Dataset):
     def __init__(
         self,
         path: str,
+        sampling_rate: int = 256,
         window_size: Union[float, int] = 1,
         window_stride: Union[float, int] = 1,
         drop_last: Optional[bool] = False,
@@ -40,22 +41,75 @@ class EEGfMRINODDIDataset(Dataset):
         self.drop_last: bool = drop_last
 
         # EEG-related infos
-        self.eeg_sampling_rate: int = 256
+        assert (
+            isinstance(sampling_rate, int) and sampling_rate <= 5000
+        ), f"sampling_rate must be below 5000, which is the original value"
+        self.eeg_sampling_rate: int = sampling_rate
         self.eeg_electrodes: List[str] = [
-            "AF3",
-            "F7",
+            "Fp1",
+            "Fp2",
             "F3",
-            "FC5",
-            "T7",
-            "P7",
+            "F4",
+            "C3",
+            "C4",
+            "P3",
+            "P4",
             "O1",
             "O2",
-            "P8",
-            "T8",
-            "FC6",
-            "F4",
+            "F7",
             "F8",
+            "T7",
+            "T8",
+            "P7",
+            "P8",
+            "Fz",
+            "Cz",
+            "Pz",
+            "Oz",
+            "FC1",
+            "FC2",
+            "CP1",
+            "CP2",
+            "FC5",
+            "FC6",
+            "CP5",
+            "CP6",
+            "TP9",
+            "TP10",
+            "POz",
+            "ECG",
+            "F1",
+            "F2",
+            "C1",
+            "C2",
+            "P1",
+            "P2",
+            "AF3",
             "AF4",
+            "FC3",
+            "FC4",
+            "CP3",
+            "CP4",
+            "PO3",
+            "PO4",
+            "F5",
+            "F6",
+            "C5",
+            "C6",
+            "P5",
+            "P6",
+            "AF7",
+            "AF8",
+            "FT7",
+            "FT8",
+            "TP7",
+            "TP8",
+            "PO7",
+            "PO8",
+            "FT9",
+            "FT10",
+            "Fpz",
+            "CPz",
         ]
         self.eeg_samples_per_window: int = int(
             np.floor(self.eeg_sampling_rate * self.window_size)
@@ -170,7 +224,7 @@ class EEGfMRINODDIDataset(Dataset):
         users_per_signal = {
             "fMRI": set(os.listdir(join(path, "fMRI"))),
             "EEG": set(os.listdir(join(path, "EEG1")) + os.listdir(join(path, "EEG2"))),
-        } 
+        }
         common_users = sorted(list(users_per_signal["fMRI"] & users_per_signal["EEG"]))
         # user 35 is somehow broken
         if "35" in common_users:
@@ -179,64 +233,93 @@ class EEGfMRINODDIDataset(Dataset):
 
     def load_data(self):
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-            
+
         global parse_subject_data
+
         def parse_subject_data(subject_no):
             subject_id: str = self.subject_ids[subject_no]
             assert subject_id in self.subject_ids
-            
+            st = time.time()
+
             # loads fmri data
-            fmri_data_filename = [f for f in os.listdir(join(self.path, "fMRI", subject_id)) if f.endswith("rest_with_cross.nii.gz")][0]
+            fmri_data_filename = [
+                f
+                for f in os.listdir(join(self.path, "fMRI", subject_id))
+                if f.endswith("rest_with_cross.nii.gz")
+            ][0]
             fmris = nib.load(join(self.path, "fMRI", subject_id, fmri_data_filename))
-            fmris = fmris.get_fdata() # (x z y t)
+            fmris = fmris.get_fdata()  # (x z y t)
             # splits the fmris into a list
-            fmris = [fmris[:,:,:, i] for i in range(fmris.shape[-1])]
+            fmris = [fmris[:, :, :, i] for i in range(fmris.shape[-1])]
             # print(f"fMRIs", len(fmris), fmris[0].shape)
-            
+
             # loads eeg data
-            eeg_subject_folder = "EEG1" if subject_id in os.listdir(join(self.path, "EEG1")) else "EEG2"
-            eeg_data_filename = [f for f in os.listdir(join(self.path, eeg_subject_folder, subject_id, "raw")) if f.endswith("vhdr")][0]
-            eegs = mne.io.read_raw_brainvision(join(self.path, eeg_subject_folder, subject_id, "raw", eeg_data_filename), preload=True, verbose=False)
+            eeg_subject_folder = (
+                "EEG1" if subject_id in os.listdir(join(self.path, "EEG1")) else "EEG2"
+            )
+            eeg_data_filename = [
+                f
+                for f in os.listdir(
+                    join(self.path, eeg_subject_folder, subject_id, "raw")
+                )
+                if f.endswith("vhdr")
+            ][0]
+            eegs = mne.io.read_raw_brainvision(
+                join(
+                    self.path, eeg_subject_folder, subject_id, "raw", eeg_data_filename
+                ),
+                preload=True,
+                verbose=False,
+            )
             sampling_rate = int(eegs.info["sfreq"])
-            print("channels", eegs.ch_names)
             # Compute the mean across channels for each time point
-            mean_amplitude = np.mean(np.abs(eegs._data), axis=0) # (t)
-            mean_amplitude = np.convolve(mean_amplitude, np.ones(sampling_rate) / sampling_rate, mode='same')
+            mean_amplitude = np.mean(np.abs(eegs._data), axis=0)  # (t)
+            mean_amplitude = np.convolve(
+                mean_amplitude, np.ones(sampling_rate) / sampling_rate, mode="same"
+            )
             # computes the cut-off threshold for cropping preliminary parts
-            threshold = np.quantile(mean_amplitude, sampling_rate * 300 * 2.16 /  len(mean_amplitude))
+            threshold = np.quantile(
+                mean_amplitude,
+                (sampling_rate * len(fmris) * 2.16) / len(mean_amplitude),
+            )
             # search for when the record must start
             for i in range(len(mean_amplitude)):
-                if np.isclose(mean_amplitude[i], threshold, atol=1e-5):
+                if np.isclose(mean_amplitude[i], threshold, atol=1e-4):
+                    i_end = ceil(i + sampling_rate + sampling_rate * len(fmris) * 2.16)
                     start_time = eegs.times[i]
-                    end_time = eegs.times[ceil(i + sampling_rate + sampling_rate * 300 * 2.16)]
+                    end_time = eegs.times[i_end]
                     break
             # crops the eegs
-            eegs = eegs.crop(tmin=start_time, tmax=end_time, include_tmax=True, verbose=False)
+            eegs = eegs.crop(
+                tmin=start_time, tmax=end_time, include_tmax=True, verbose=False
+            )
             # resamples the eegs
-            eegs = eegs.resample(self.eeg_sampling_rate, n_jobs=2, verbose=False)
+            eegs = eegs.resample(self.eeg_sampling_rate, verbose=False)
             # extract the numpy array from the mne raw object
             samples_per_fmri = ceil(self.eeg_sampling_rate * 2.16)
-            eegs, _ = eegs[:, :] # (c t)
+            eegs, _ = eegs[:, :]  # (c t)
             # splits the eegs into a list, one record for each fMRI image
-            eegs = [eegs[:, i*samples_per_fmri:i*samples_per_fmri + samples_per_fmri] for i in range(len(fmris))]
-            assert all([e.shape == eegs[0].shape for e in eegs]), f"some eegs are not the same shape"
+            eegs = [
+                eegs[:, i * samples_per_fmri : i * samples_per_fmri + samples_per_fmri]
+                for i in range(len(fmris))
+            ]
+            assert all(
+                [e.shape == eegs[0].shape for e in eegs]
+            ), f"some eegs are not the same shape"
+            print("loaded subject", subject_id, "in", np.round(time.time() - st, 2))
             return eegs, fmris, subject_id
 
         st = time.time()
-        with Pool(processes=os.cpu_count()-1) as pool:
-        # with Pool(processes=len(self.subject_ids)) as pool:
+        with Pool(processes=os.cpu_count()) as pool:
             data_pool = pool.map(
                 parse_subject_data, [i for i in range(len(self.subject_ids))]
             )
             data_pool = [d for d in data_pool if d is not None]
-            eegs: List[np.ndarray] = [
-                e for eegs, _, _ in data_pool for e in eegs
-            ]
-            fmris: List[np.ndarray] = [
-                e for _, fmris, _, _ in data_pool for e in fmris
-            ]
+            eegs: List[np.ndarray] = [e for eegs, _, _ in data_pool for e in eegs]
+            fmris: List[np.ndarray] = [e for _, fmris, _ in data_pool for e in fmris]
             subject_ids: List[str] = [
                 s_id
                 for eegs_lists, _, _, subject_id in data_pool
@@ -265,7 +348,7 @@ class EEGfMRINODDIDataset(Dataset):
             #     #                          (experiment_scaled.max(axis=0) - experiment_scaled.min(axis=0))) - 1
             #
             # experiment_scaled = np.swapaxes(experiment, 0, 1) # c t
-            
+
             if mode == "std":
                 mean = experiment.mean(axis=0)
                 std = experiment.std(axis=0)
