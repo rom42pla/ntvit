@@ -1,6 +1,6 @@
 # NT-ViT: Neural Transcoding Vision Transformers for EEG-to-fMRI Synthesis
 
-This is a PyTorch implementation of NT-ViT proposed by our paper "Neural Transcoding Vision Transformers for EEG-to-fMRI Synthesis" (submitted to CVPR 2024).
+This is a PyTorch implementation of NT-ViT proposed by our paper "Neural Transcoding Vision Transformers for EEG-to-fMRI Synthesis".
 
 ## Environment setup
 - Install [Anaconda](https://www.anaconda.com/download)
