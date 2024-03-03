@@ -2,10 +2,15 @@ mne         # for EEG data
 nibabel     # for fMRI data
 icecream
 shutils
+pytest
+icecream
+thop
 
 numpy
 scipy
+pandas
 einops
 torch 
+torchaudio
 pytorch-lightning 
 wandb
