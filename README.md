@@ -1,6 +1,8 @@
 # NT-ViT: Neural Transcoding Vision Transformers for EEG-to-fMRI Synthesis
 
-This is a PyTorch implementation of NT-ViT proposed by our paper "Neural Transcoding Vision Transformers for EEG-to-fMRI Synthesis".
+This is a PyTorch implementation of NT-ViT proposed in our paper "Neural Transcoding Vision Transformers for EEG-to-fMRI Synthesis".
+
+
 
 ## Environment setup
 - Install [Anaconda](https://www.anaconda.com/download)
@@ -83,3 +85,32 @@ model = NTViT.load_from_checkpoint(PATH_TO_WEIGHTS, map_location=torch.device('c
 ```
 Due to limitations in file size for the supplementary material, no pre-trained weights can be attached to this code.
 However, they will be distributed after the final decision.
+
+## Comparison with SOTA
+### NODDI dataset
+| Method              | RMSE $\downarrow$ | SSIM $\uparrow$ | PSNR $\uparrow$ |
+|---------------------|-------------------|-----------------|-----------------|
+| LP [1]              | 0.51              | 0.433           | -               |
+| TALP [1]            | 0.41              | 0.472           | -               |
+| FP [1]              | 0.43              | 0.462           | -               |
+| TAFP [1]            | 0.40              | 0.462           | -               |
+| CNN [2]             | 0.46              | 0.449           | -               |
+| NT-ViT w/o DM, ours | 0.11              | 0.516           | 19.56           |
+| NT-ViT, ours        | **0.10**              | **0.534**           | **20.05**           |
+
+### Oddball dataset
+| Method              | RMSE $\downarrow$ | SSIM $\uparrow$ | PSNR $\uparrow$ |
+|---------------------|-------------------|-----------------|-----------------|
+| LP [1]              | 0.74              | 0.183           | -               |
+| TALP [1]            | 0.77              | 0.158           | -               |
+| FP [1]              | 0.73              | 0.196           | -               |
+| TAFP [1]            | 0.70              | 0.200           | -               |
+| CNN [2]             | 0.86              | 0.189           | -               |
+| NT-ViT w/o DM, ours | **0.07**              | 0.595           | 22.98           |
+| NT-ViT, ours        | **0.07**              | **0.613**           | **23.09**           |
+
+## References
+1) Calhas, D., Henriques, R.: Eeg to fmri synthesis benefits from attentional graphs of electrode relationships (2022). https://arxiv.org/abs/2203.03481
+2) Liu, X., Sajda, P.: A convolutional neural network for transcoding simultaneously550 550
+acquired eeg-fmri data. In: 2019 9th International IEEE/EMBS Conference on551 551
+Neural Engineering (NER). pp. 477–482 (2019). https://doi.org/10.1109/NER.2019.8716994
