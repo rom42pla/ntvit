@@ -62,16 +62,16 @@ In order to do so:
 For the sake of the review, a portion of the preprocessed datasets containing a sample from each subject is attached to this code, in the `datasets_preprocessed` folder. 
 
 ## Training a model
-To train a model, simply run `train.py`. 
+To train a model using the LOSO scheme, simply run `train.py`. 
 The logs will be saved to [wandb](wandb.ai), so you will be prompted to login on the first time running the script.
 
 For example, this is the command to train a model on the NODDI dataset:
 ```bash
-python train.py --dataset_type=noddi --dataset_path=PATH_TO_PREPROCESSED_DATASET
+python train.py --dataset_type=noddi --dataset_path=PATH_TO_PREPROCESSED_DATASET --use_domain_matching
 ```
 To train a model on the Oddball dataset, `--dataset_type` must be given `oddball` as parameter:
 ```bash
-python train.py --dataset_type=oddball --dataset_path=PATH_TO_PREPROCESSED_DATASET
+python train.py --dataset_type=oddball --dataset_path=PATH_TO_PREPROCESSED_DATASET --use_domain_matching
 ```
 
 The description of the parameters accepted by the script can be viewed using `python train.py -h`.

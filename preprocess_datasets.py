@@ -1,8 +1,10 @@
 import argparse
+import time
 import os
 from os import listdir, makedirs
 from os.path import isdir, exists, join, normpath
 import json
+from typing import List
 from tqdm import tqdm
 from math import ceil
 import numpy as np
@@ -14,8 +16,10 @@ import nibabel as nib
 
 def preprocess_noddi(
         raw_dataset_path: str, output_path: str, 
-        sampling_rate: int = 256,
+        sampling_rate: int = 512,
     ):
+    if not isdir(output_path):
+        makedirs(output_path)
     def get_subject_ids(path: str) -> List[str]:
         assert isdir(path)
         users_per_signal = {
@@ -76,7 +80,7 @@ def preprocess_noddi(
             fmris_normalized_path = join(
                 *(normpath(fmris_sample_path).split(os.sep)[-3:])
             )
-            assert exists(join(dataset_path, fmris_normalized_path))
+            assert exists(join(output_path, fmris_normalized_path))
             metas_samples_subject.append(
                 {
                     "subject_id": subject_id,
@@ -192,7 +196,7 @@ def preprocess_noddi(
             eegs_normalized_path = join(
                 *(normpath(eegs_sample_path).split(os.sep)[-3:])
             )
-            assert exists(join(dataset_path, eegs_normalized_path))
+            assert exists(join(output_path, eegs_normalized_path))
             
             # saves the ecg
             ecgs_sample_path = join(ecgs_folder, f"{i}.npy")
@@ -207,7 +211,7 @@ def preprocess_noddi(
             ecgs_normalized_path = join(
                 *(normpath(ecgs_sample_path).split(os.sep)[-3:])
             )
-            assert exists(join(dataset_path, ecgs_normalized_path))
+            assert exists(join(output_path, ecgs_normalized_path))
             metas_samples_subject[i].update({
                     "eegs_electrodes": electrodes,
                     "eegs_path": eegs_normalized_path,
@@ -355,7 +359,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     assert isdir(args.dataset_path)
-    assert isdir(args.output_path)
     assert args.sampling_rate >= 1
     if args.dataset_type == "noddi":
         preprocess_noddi(args.dataset_path, args.output_path, sampling_rate=args.sampling_rate)

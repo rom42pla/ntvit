@@ -15,6 +15,35 @@ def set_seed(seed):
     torch.manual_seed(seed)
 
 
+def get_simple_split_runs(dataset, dataset_name: str) -> List[Dict[str, List[int]]]:
+    runs = []
+    data_df = pd.DataFrame(
+        [
+            {
+                "subject_id": sample["subject_id"],
+            }
+            for sample in dataset
+        ]
+    )
+    if dataset_name == "noddi":
+        # randomly pick 2 subjects from the total
+        test_subject_ids = random.sample(list(data_df["subject_id"].unique()), 2)
+    elif dataset_name == "oddball":
+        # randomly pick 4 subjects from the total
+        test_subject_ids = random.sample(list(data_df["subject_id"].unique()), 4)
+    train_indices = data_df[data_df["subject_id"].isin(test_subject_ids) == False].index.tolist()
+    val_indices = data_df[data_df["subject_id"].isin(test_subject_ids) == True].index.tolist()
+    assert sorted(train_indices + val_indices) == data_df.index.tolist()
+    runs.append(
+        {
+            "train_indices": train_indices,
+            "val_indices": val_indices,
+            "subject_id": test_subject_ids,
+        }
+    )
+    return runs
+
+
 def get_loso_runs(dataset) -> List[Dict[str, List[int]]]:
     runs = []
     data_df = pd.DataFrame(

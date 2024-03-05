@@ -1,5 +1,6 @@
 mne         # for EEG data
 nibabel     # for fMRI data
+joblib
 icecream
 shutils
 pytest

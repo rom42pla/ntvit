@@ -16,7 +16,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 import wandb
 
 from ntvit import NTViT
-from utils import download_from_wandb, get_loso_runs, get_kfold_runs, set_seed
+from utils import download_from_wandb, get_loso_runs, get_kfold_runs, get_simple_split_runs, set_seed
 
 if __name__ == "__main__":
     ##############################
@@ -51,7 +51,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--validation",
         type=str,
-        choices={"loso", "kfold"},
+        choices={"simple", "loso", "kfold"},
         default="loso",
         help="The validation scheme to use",
     )
@@ -63,11 +63,11 @@ if __name__ == "__main__":
     )
     # model params
     parser.add_argument("--eeg_patches_size", type=int, default=8, help="Size of the patches of the EEG spectrogram in the encoder")
-    parser.add_argument("--fmri_patches_size", type=int, default=8, help="Size of the fMRI patches in the decoder")
+    parser.add_argument("--fmri_patches_size", type=int, default=6, help="Size of the fMRI patches in the decoder")
     parser.add_argument("--fmris_downsampling_factor", type=int, default=1, help="Size of the downsampling of the fMRI volumes")
     parser.add_argument("--spectrogram_scale", type=float, default=2, help="Stride of the STFT window when generating the EEG spectrogram")
-    parser.add_argument("--activation", type=str, default="softplus", choices={"softplus", "gelu", "selu"}, help="Type of activation function to use")
-    parser.add_argument("--layers", type=int, default=1, help="Number of layers to use")
+    parser.add_argument("--activation", type=str, default="selu", choices={"softplus", "gelu", "selu"}, help="Type of activation function to use")
+    parser.add_argument("--layers", type=int, default=3, help="Number of layers to use")
     parser.add_argument("--h_dim", type=int, default=256, help="Size of the latent")
     parser.add_argument(
         "--use_cm_loss",
@@ -101,8 +101,8 @@ if __name__ == "__main__":
         help="The alpha used in the discriminator loss",
     )
     # regularization
-    parser.add_argument("--dropout", type=float, default=0.2, help="The amount of dropout to use")
-    parser.add_argument("--input_noise", type=float, default=0.2, help="The amount of gaussian noise to add to the EEG spectrogram")
+    parser.add_argument("--dropout", type=float, default=0., help="The amount of dropout to use")
+    parser.add_argument("--input_noise", type=float, default=0., help="The amount of gaussian noise to add to the EEG spectrogram")
     parser.add_argument("--weight_decay", type=float, default=1e-2, help="The amount of weight decay to use with AdamW")
     # trainer params
     parser.add_argument(
@@ -119,7 +119,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_epochs",
         type=int,
-        default=20,
+        default=30,
         help="Maximum number of training epochs",
     )
     parser.add_argument(
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed",
         type=int,
-        default=random.randint(0, 2**32),
+        default=5,
         help="The seed to use for reproducibility purposes",
     )
     parser.add_argument(
@@ -154,7 +154,7 @@ if __name__ == "__main__":
         type=str,
         help="The label of the experiment",
     )
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
     args = parser.parse_args()
     
     # sets the seed
@@ -188,10 +188,13 @@ if __name__ == "__main__":
     )
 
     # loops through the splits
-    if args.validation == "loso":
+    if args.validation == "simple":
+        runs = get_simple_split_runs(dataset, dataset_name=args.dataset_type)
+    elif args.validation == "loso":
         runs = get_loso_runs(dataset)
     elif args.validation == "kfold":
         runs = get_kfold_runs(dataset, k=args.k)
+    
     if args.max_runs:
         runs = runs[:args.max_runs]
     for i_run, run in tqdm(enumerate(runs), desc="subjects", total=len(runs)):
@@ -205,7 +208,7 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             shuffle=True,
             drop_last=False,
-            num_workers=os.cpu_count() - 1,
+            num_workers=4,
             pin_memory=True,
         )
         dataloader_val = DataLoader(
@@ -213,7 +216,7 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             shuffle=False,
             drop_last=False,
-            num_workers=os.cpu_count() - 1,
+            num_workers=4,
             pin_memory=True,
         )
         # model
